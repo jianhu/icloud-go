@@ -26,6 +26,7 @@ const (
 )
 
 // service is the base service used by all CloudKit Web Service APIs.
+//
 //nolint:structcheck // https://github.com/golangci/golangci-lint/issues/1517
 type service struct {
 	client   *Client
@@ -56,6 +57,7 @@ type Client struct {
 	httpClient *http.Client
 
 	Records *RecordsService
+	Assets  *AssetsService
 }
 
 // NewClient returns a new CloudKit Web Services API client.
@@ -76,6 +78,7 @@ func NewClient(container, keyID string, privateKey *ecdsa.PrivateKey, environmen
 	}
 
 	client.Records = &RecordsService{client, "/records/modify"}
+	client.Assets = &AssetsService{client, "/assets/upload"}
 
 	// Apply supplied options.
 	if err := client.Options(options...); err != nil {
