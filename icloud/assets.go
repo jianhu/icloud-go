@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 )
 
@@ -18,7 +19,7 @@ type UploadUrlRequest struct {
 // UploadField is an operation on a single record.
 type UploadField struct {
 	// Name of the record.
-	RecorName string `json:"recordName,omitempty"`
+	RecordName string `json:"recordName,omitempty"`
 	// Type of the record.
 	RecordType string `json:"recordType,omitempty"`
 	// Asset field name to upload.
@@ -31,7 +32,7 @@ type UploadUrlResponse []UploadURL
 // UploadURL is the returned URL for asset to upload
 type UploadURL struct {
 	// Name of the record.
-	RecorName string `json:"recordName,omitempty"`
+	RecordName string `json:"recordName,omitempty"`
 	// Asset field name in the record.
 	FieldName string `json:"fieldName,omitempty"`
 	// The location to upload the asset data.
@@ -57,34 +58,45 @@ type AssetsService service
 func (s *AssetsService) UploadURL(ctx context.Context, database Database, req UploadUrlRequest) (UploadUrlResponse, error) {
 	path := "/" + database.String() + s.basePath
 
-	var res UploadUrlResponse
+	var res struct {
+		Tokens UploadUrlResponse `json:"tokens,omitempty"`
+	}
 	if err := s.client.call(ctx, http.MethodPost, path, req, &res); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get asset upload url failed, cause: %w", err)
 	}
 
-	return res, nil
+	return res.Tokens, nil
 }
 
 // Upload to returned url
 func (s *AssetsService) Upload(ctx context.Context, url string, data []byte) (*UploadResponse, error) {
-	body := bytes.NewReader(data)
-	resp, err := http.Post(url, "application/x-www-form-urlencoded", body)
-	if err != nil {
-		return nil, err
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "asset")
+	if _, err := io.Copy(part, bytes.NewReader(data)); err != nil {
+		return nil, fmt.Errorf("failed construct upload request, cause: %w", err)
 	}
-	if resp.StatusCode/100 != 2 {
-		return nil, errors.New("not 2xx status code")
+	writer.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed construct upload request, cause: %w", err)
+	}
+	req.Header.Add("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("upload request failed, cause: %w", err)
 	}
 	defer resp.Body.Close()
-	jsonData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("upload asset not 2xx response status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 	var v struct {
 		SingleFile UploadResponse `json:"singleFile"`
 	}
-	if err := json.Unmarshal(jsonData, &v); err != nil {
-		return nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, fmt.Errorf("upload asset decode errro, cause: %w", err)
 	}
 	return &v.SingleFile, nil
 }
